@@ -1,0 +1,12 @@
+.DS_Store
+*.a
+*.dylib
+*.o
+*.app/
+zig-cache/
+.zig-cache/
+zig-out/
+native/tobiifree_core.zig
+native/tlv.zig
+*.log
+calibration.json

@@ -1,0 +1,54 @@
+name: TobiiBridge release
+
+on:
+  push:
+    tags: ['a51m-bridge-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and release (e.g. a51m-bridge-v1.5.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # The target machine is an Intel Hackintosh, so build an x86_64 app.
+    runs-on: macos-15-intel
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Build app
+        run: |
+          zig version
+          a51m-bridge/build.sh
+
+      - name: Package
+        run: |
+          VERSION="${TAG#a51m-bridge-v}"
+          ZIP="TobiiBridge-v${VERSION}-macOS-x86_64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$HOME/Applications/TobiiBridge-Native-v1.5.app" "$ZIP"
+          shasum -a 256 "$ZIP" | tee "$ZIP.sha256"
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+
+      - name: Publish release
+        run: |
+          NOTES="a51m-bridge/release-notes/${TAG}.md"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" "$ZIP.sha256" --clobber
+          else
+            gh release create "$TAG" "$ZIP" "$ZIP.sha256" --title "TobiiBridge ${TAG#a51m-bridge-v}" --notes-file "$NOTES"
+          fi

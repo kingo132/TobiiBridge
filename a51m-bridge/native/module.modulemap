@@ -1,0 +1,4 @@
+module TobiiNative {
+    header "tobii_native.h"
+    export *
+}
