@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to build and release (e.g. a51m-bridge-v1.5.0)'
+        description: 'Release tag, created on the dispatched commit if it does not exist (e.g. a51m-bridge-v1.5.0)'
         required: true
 
 permissions:
@@ -21,8 +21,6 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -50,5 +48,5 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$ZIP" "$ZIP.sha256" --clobber
           else
-            gh release create "$TAG" "$ZIP" "$ZIP.sha256" --title "TobiiBridge ${TAG#a51m-bridge-v}" --notes-file "$NOTES"
+            gh release create "$TAG" "$ZIP" "$ZIP.sha256" --target "$GITHUB_SHA" --title "TobiiBridge ${TAG#a51m-bridge-v}" --notes-file "$NOTES"
           fi
