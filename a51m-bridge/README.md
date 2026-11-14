@@ -18,6 +18,7 @@ Current runtime architecture: **Swift/AppKit + Zig + libusb + IOKit**. Node.js a
 - 9-point software calibration
 - Fixed gaze smoothing
 - Gaze-dot overlay with persistent show/hide preference
+- V1.6.1: gaze dot and calibration stay on the built-in panel with external displays connected
 - Live stream Hz / validity stats
 - Sleep/wake recovery and automatic reconnect
 - Manual reconnect
@@ -55,10 +56,33 @@ cd a51m-bridge
 Run:
 
 ```bash
-open "$HOME/Applications/TobiiBridge-Native-v1.5.app"
+open "$HOME/Applications/TobiiBridge-Native-v1.6.1.app"
 ```
 
 The build copies `driver/src/tobiifree_core.zig` and `driver/src/tlv.zig` into the local native build directory, compiles the Zig bridge into a static library, compiles Swift/AppKit, bundles `libusb-1.0.0.dylib`, fixes `@rpath`, and ad-hoc signs the app.
+
+Set `TOBIIBRIDGE_APP_PATH` to use another output path. Existing bundles are never overwritten by the build script.
+
+## External displays (V1.6.1)
+
+The transparent drawing surface is explicitly cleared before each frame and uses a layer-backed view. A smaller copy of the gaze dot inside an application's live window thumbnail is a preview of the overlay, not a second tracking point.
+
+This bridge targets the **integrated** Area-51m IS5. Its tracking area is the built-in panel. Gaze dots and all nine calibration targets use the same overlay on that panel, regardless of which display is primary or contains the focused window. Connecting an external display does not move the tracking area.
+
+The app resolves the panel with `CGDisplayIsBuiltin`, uses its full AppKit frame (including negative origins), and updates that frame when display configuration changes or the machine wakes. If no drawable built-in panel is available, it hides the overlay, disables calibration and suspends smart dimming. It never falls back to an external display. OS display mirroring may duplicate content on both physical panels; independently tracking the mirrored external panel is not supported.
+
+If the target panel or its geometry changes during calibration, the unfinished calibration is cancelled. A new calibration records the panel UUID, and a calibration for another panel is not applied. Existing V1.5 calibration files remain compatible with the built-in tracker and are left untouched until the user explicitly saves or resets calibration. If a prior calibration was performed on the wrong screen, rerun it on the built-in panel.
+
+This follows Tobii's documented display assignment rule: gaze is tracked only on the screen where the tracker is mounted and configured. Tobii's selectable display setup is explicitly for **non-integrated** trackers. The bridge's existing nine-point software calibration remains separate from Windows/Tobii firmware calibration; this update aligns display routing, not the Windows calibration algorithm.
+
+References: [Multiple screens](https://help.tobii.com/hc/en-us/articles/209529429-Can-I-use-multiple-screens), [Display setup](https://help.tobii.com/hc/en-us/articles/360003101733-How-to-do-a-display-setup).
+
+Run the routing regression checks on macOS:
+
+```bash
+swiftc DisplayRouting.swift tools/display-routing-tests.swift -o /tmp/tobii-display-tests
+/tmp/tobii-display-tests
+```
 
 ## Brightness probe
 

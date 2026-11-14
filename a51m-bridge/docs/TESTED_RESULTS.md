@@ -1,5 +1,20 @@
 # Tested results
 
+## V1.6.1 external-display routing
+
+Verified on the Area-51m R2 with an external VG280K as the primary display and the built-in Retina display arranged below it:
+
+- Built-in panel selected at AppKit frame `(0, -720, 1280, 720)`, backing scale `2`.
+- Live USB handshake and gaze subscription successful.
+- Overlay window and the first nine-point calibration target placed on the built-in panel.
+- A display-configuration notification restored an intentionally relocated overlay to the exact panel frame and resized the view correctly.
+- Test calibration cancelled without changing the existing saved calibration file.
+- Routing regression checks cover external-primary ordering, no built-in panel, negative origins, mixed scaling, legacy calibration decoding and panel UUID binding.
+- Offscreen drawing checks confirm previous dot pixels are cleared after movement and hiding.
+- V1.6.1 app built and passed strict ad-hoc signature verification locally.
+
+Physical cable hot-plug, lid-closed operation, OS display mirroring and a complete new nine-point calibration were not exercised in this session. Windows display-routing behavior was checked against Tobii's documentation, not a parallel Windows installation.
+
 ## USB / gaze
 
 Tested device: Tobii IS5 Firefly integrated in Alienware Area-51m R2.

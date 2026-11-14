@@ -12,12 +12,6 @@ struct Observation {
     let ty: Double
 }
 
-struct CalibrationData: Codable {
-    let xCoefficients: [Double]
-    let yCoefficients: [Double]
-    let rmsPoints: Double
-}
-
 final class GazeView: NSView {
     var point: CGPoint? {
         didSet { needsDisplay = true }
@@ -39,6 +33,12 @@ final class GazeView: NSView {
     override var isFlipped: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
+        // The overlay has a persistent transparent backing store. Explicitly
+        // erase the previous frame, including after a backing-scale/size change;
+        // transparent source-over drawing alone cannot remove old dot pixels.
+        NSColor.clear.setFill()
+        bounds.fill(using: .copy)
+
         if let t = target {
             NSColor.black.withAlphaComponent(0.83).setFill()
             bounds.fill()
@@ -378,6 +378,10 @@ final class PhysicalBrightness {
 final class BridgeApp: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var gazeView: GazeView!
+    private var trackingDisplay: TrackingDisplay?
+    private var displayRevision = 0
+    private var displayItem: NSMenuItem!
+    private var cancelCalibrationItem: NSMenuItem!
 
     private var statusItem: NSStatusItem!
     private var pauseItem: NSMenuItem!
@@ -502,7 +506,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         dimFadeSeconds = [0.3, 0.5, 1.0, 2.0].contains(fadeIn) ? fadeIn : 0.5
         restoreFadeSeconds = [0.3, 0.5, 1.0, 2.0].contains(fadeOut) ? fadeOut : 0.5
         createMenu()
-        loadCalibration()
+        refreshTrackingDisplay()
         presenceStatus(hardware.available ? "waiting" : "no physical brightness control")
         if dimEnabled && !hardware.available {
             dimEnabled = false
@@ -537,13 +541,8 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     }
 
     private func createOverlay() {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
-            NSApp.terminate(nil)
-            return
-        }
-
         window = NSWindow(
-            contentRect: screen.frame,
+            contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -554,6 +553,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         window.isOpaque = false
         window.hasShadow = false
         window.ignoresMouseEvents = true
+        window.title = "TobiiBridge Tracking Overlay"
 
         window.collectionBehavior = [
             .canJoinAllSpaces,
@@ -563,12 +563,49 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         gazeView = GazeView(
             frame: NSRect(
                 origin: .zero,
-                size: screen.frame.size
+                size: window.frame.size
             )
         )
 
+        gazeView.autoresizingMask = [.width, .height]
+        gazeView.wantsLayer = true
+        gazeView.layerContentsRedrawPolicy = .onSetNeedsDisplay
         window.contentView = gazeView
-        window.orderFrontRegardless()
+    }
+
+    func applicationDidChangeScreenParameters(_ notification: Notification) {
+        refreshTrackingDisplay()
+    }
+
+    private func refreshTrackingDisplay() {
+        guard window != nil, displayItem != nil else { return }
+        let next = TrackingDisplay.current()
+        let previous = trackingDisplay
+        if next != previous {
+            displayRevision += 1
+            // Never mix samples collected against different target geometry.
+            abortCalibrationForDisconnect()
+            trackingDisplay = next
+            filteredPoint = nil
+            lastValidTime = .distantPast
+            gazeView.point = nil
+            resetPresence("display changed")
+            if next?.uuid != previous?.uuid { loadCalibration() }
+            NativeLogger.shared.write("Tracking display: \(next?.name ?? "unavailable") " +
+                "uuid=\(next?.uuid ?? "none") frame=\(String(describing: next?.frame))")
+        }
+        if let display = next {
+            // Full AppKit frame, including negative origins and Retina scaling.
+            // Reapply even for an unchanged descriptor in case WindowServer
+            // moved the overlay during display reconfiguration.
+            window.setFrame(display.frame, display: true)
+            window.orderFrontRegardless()
+            displayItem.title = "Eye-tracking display: \(display.name)"
+        } else {
+            window.orderOut(nil)
+            displayItem.title = "Eye tracking suspended: built-in display unavailable"
+        }
+        calibrationItem.isEnabled = next != nil && !calibrating
     }
 
     private func setIndicator(_ next: Indicator) {
@@ -603,7 +640,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         statusItem.button?.image = img
         statusItem.button?.imagePosition = .imageOnly
         statusItem.button?.title = ""
-        statusItem.button?.toolTip = "Tobii Native V1.5 · " + description
+        statusItem.button?.toolTip = "Tobii Native V1.6.1 · " + description
         infoItem?.title = "Status: " + description
     }
 
@@ -709,6 +746,13 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         dotItem.target = self
         dotItem.state = dotVisible ? .on : .off
         menu.addItem(dotItem)
+
+        displayItem = NSMenuItem(title: "Eye-tracking display: checking", action: nil, keyEquivalent: "")
+        displayItem.isEnabled = false
+        menu.addItem(displayItem)
+        let displayHelp = NSMenuItem(title: "Built-in Tobii follows the built-in display", action: nil, keyEquivalent: "")
+        displayHelp.isEnabled = false
+        menu.addItem(displayHelp)
 
         statsItem = NSMenuItem(
             title: "Stream: waiting for data",
@@ -819,6 +863,11 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         calibrationItem.target = self
         menu.addItem(calibrationItem)
 
+        cancelCalibrationItem = NSMenuItem(title: "Cancel calibration", action: #selector(cancelCalibrationNow), keyEquivalent: "")
+        cancelCalibrationItem.target = self
+        cancelCalibrationItem.isEnabled = false
+        menu.addItem(cancelCalibrationItem)
+
         let reset = NSMenuItem(
             title: "Reset software calibration",
             action: #selector(resetCalibration),
@@ -854,6 +903,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     }
 
     private func loadCalibration() {
+        calibration = nil
         guard let data = try? Data(
             contentsOf: calibrationPath
         ),
@@ -864,7 +914,8 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         result.xCoefficients.count == 3,
         result.yCoefficients.count == 3,
         result.xCoefficients.allSatisfy({ $0.isFinite }),
-        result.yCoefficients.allSatisfy({ $0.isFinite })
+        result.yCoefficients.allSatisfy({ $0.isFinite }),
+        result.applies(to: trackingDisplay)
         else {
             return
         }
@@ -949,7 +1000,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
             presenceStatus(hardware.available ? "disabled" : "unsupported by display")
             return
         }
-        guard !sleeping, !shuttingDown, !calibrating, !paused else {
+        guard trackingDisplay != nil, !sleeping, !shuttingDown, !calibrating, !paused else {
             hardware.restore()
             presenceStatus("suspended")
             return
@@ -1133,7 +1184,8 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         observations.removeAll()
         gazeView.target = nil
         gazeView.instruction = ""
-        calibrationItem.isEnabled = true
+        calibrationItem.isEnabled = trackingDisplay != nil
+        cancelCalibrationItem.isEnabled = false
         calibrationItem.title = "Calibrate (9 points)"
         NativeLogger.shared.write("Software calibration interrupted; saved calibration preserved")
     }
@@ -1162,7 +1214,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         }
 
         guard valid, let x, let y,
-              x.isFinite, y.isFinite else {
+              x.isFinite, y.isFinite, trackingDisplay != nil else {
             return
         }
 
@@ -1252,7 +1304,9 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     }
 
     @objc private func startCalibration() {
+        refreshTrackingDisplay()
         guard !calibrating, !sleeping,
+              trackingDisplay != nil,
               let token = nativeToken, !token.isStopped,
               let last = lastFrameAt,
               Date().timeIntervalSince(last) < 1.0 else { return }
@@ -1271,6 +1325,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
 
         calibrationItem.title = "Calibrating..."
         calibrationItem.isEnabled = false
+        cancelCalibrationItem.isEnabled = true
 
         showTarget()
     }
@@ -1281,7 +1336,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
 
         gazeView.target = targets[targetIndex]
         gazeView.instruction =
-            "Look at the center of the dot · " +
+            "Built-in display · Look at the center of the dot · " +
             "\(targetIndex + 1) / 9"
     }
 
@@ -1456,7 +1511,8 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         return CalibrationData(
             xCoefficients: a,
             yCoefficients: b,
-            rmsPoints: rms
+            rmsPoints: rms,
+            displayUUID: trackingDisplay?.uuid
         )
     }
 
@@ -1465,7 +1521,8 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         gazeView.target = nil
         gazeView.instruction = ""
 
-        calibrationItem.isEnabled = true
+        calibrationItem.isEnabled = trackingDisplay != nil
+        cancelCalibrationItem.isEnabled = false
         calibrationItem.title = "Calibrate (9 points)"
 
         guard let candidate = fitCalibration() else {
@@ -1496,7 +1553,12 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
 
+        let revision = displayRevision
         if alert.runModal() == .alertFirstButtonReturn {
+            guard revision == displayRevision, candidate.applies(to: trackingDisplay) else {
+                showAlert("Calibration stopped", "The display changed. Please calibrate the built-in display again.")
+                return
+            }
             do {
                 try saveCalibration(candidate)
                 calibration = candidate
@@ -1523,10 +1585,15 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         gazeView.target = nil
         gazeView.instruction = ""
 
-        calibrationItem.isEnabled = true
+        calibrationItem.isEnabled = trackingDisplay != nil
+        cancelCalibrationItem.isEnabled = false
         calibrationItem.title = "Calibrate (9 points)"
 
         showAlert("Calibration stopped", message)
+    }
+
+    @objc private func cancelCalibrationNow() {
+        abortCalibrationForDisconnect()
     }
 
     private func showAlert(
@@ -1648,7 +1715,8 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
             gazeView.target = nil
             gazeView.instruction = ""
 
-            calibrationItem.isEnabled = true
+            calibrationItem.isEnabled = trackingDisplay != nil
+            cancelCalibrationItem.isEnabled = false
             calibrationItem.title = "Calibrate (9 points)"
         }
 
@@ -1667,6 +1735,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         print("System woke up")
 
         sleeping = false
+        refreshTrackingDisplay()
 
         setIndicator(.reconnecting)
 
@@ -1709,6 +1778,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleGazeDot() {
+        refreshTrackingDisplay()
         guard !calibrating else {
             return
         }
@@ -1717,7 +1787,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         preferences.set(dotVisible, forKey: "showGazeDot")
         dotItem.state = dotVisible ? .on : .off
 
-        if dotVisible && !paused &&
+        if dotVisible && trackingDisplay != nil && !paused &&
            Date().timeIntervalSince(lastValidTime) < 0.35 {
             gazeView.point = filteredPoint
         } else {
@@ -1796,7 +1866,12 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
 
 }
 
-let app = NSApplication.shared
-let delegate = BridgeApp()
-app.delegate = delegate
-app.run()
+@main
+struct TobiiBridgeMain {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = BridgeApp()
+        app.delegate = delegate
+        withExtendedLifetime(delegate) { app.run() }
+    }
+}

@@ -2,7 +2,7 @@
 
 This repository is [Aetherall/tobiifree](https://github.com/Aetherall/tobiifree) plus **[`a51m-bridge/`](a51m-bridge/)**, a native macOS menu-bar app that runs the built-in Tobii IS5 Firefly (`2104:030E`) of an Alienware Area-51m R2 Hackintosh.
 
-- **Download:** see [Releases](../../releases). The app is ad-hoc signed, so after unzipping run `xattr -dr com.apple.quarantine TobiiBridge-Native-v1.5.app` once.
+- **Download:** see [Releases](../../releases). The app is ad-hoc signed, so after unzipping run `xattr -dr com.apple.quarantine TobiiBridge-Native-*.app` once.
 - **Features:** native gaze streaming (~33 Hz), 9-point software calibration, sleep/wake recovery and auto-reconnect, and smart dimming of the physical LCD backlight when you look away.
 - **Build from source, docs and test results:** [`a51m-bridge/README.md`](a51m-bridge/README.md)
 - **Hackintosh EFI for this laptop:** [kingo132/a51m-r2-5700m-hackintosh](https://github.com/kingo132/a51m-r2-5700m-hackintosh)

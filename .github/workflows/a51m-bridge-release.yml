@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag, created on the dispatched commit if it does not exist (e.g. a51m-bridge-v1.5.0)'
+        description: 'Release tag, created on the dispatched commit if it does not exist (e.g. a51m-bridge-v1.6.1)'
         required: true
 
 permissions:
@@ -19,6 +19,7 @@ jobs:
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
+      TOBIIBRIDGE_APP_PATH: ${{ github.workspace }}/release-build/TobiiBridge-Native-v1.6.1.app
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +30,11 @@ jobs:
       - name: Install libusb
         run: brew install libusb
 
+      - name: Check integrated display routing
+        run: |
+          swiftc a51m-bridge/DisplayRouting.swift a51m-bridge/tools/display-routing-tests.swift -o "$RUNNER_TEMP/tobii-display-tests"
+          "$RUNNER_TEMP/tobii-display-tests"
+
       - name: Build app
         run: |
           zig version
@@ -38,7 +44,7 @@ jobs:
         run: |
           VERSION="${TAG#a51m-bridge-v}"
           ZIP="TobiiBridge-v${VERSION}-macOS-x86_64.zip"
-          ditto -c -k --sequesterRsrc --keepParent "$HOME/Applications/TobiiBridge-Native-v1.5.app" "$ZIP"
+          ditto -c -k --sequesterRsrc --keepParent "$TOBIIBRIDGE_APP_PATH" "$ZIP"
           shasum -a 256 "$ZIP" | tee "$ZIP.sha256"
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
 
