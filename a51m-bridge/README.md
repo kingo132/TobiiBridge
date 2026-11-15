@@ -94,6 +94,11 @@ without changing that choice. The app retries discovery every five seconds and
 waits for fresh gaze before resuming. Only the menu toggle changes the saved
 enabled preference.
 
+Hardware errors now log the IOKit return code, service/registry ID, and
+target/readback brightness. A write rejection, failed read, and readback mismatch
+are separate messages. The old generic failure log cannot distinguish these
+causes; successful tests after a restart do not identify a prior transient fault.
+
 Run the isolated persistence regression checks (no physical backlight writes or USB access):
 
 ```bash

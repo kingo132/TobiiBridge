@@ -19,7 +19,7 @@ jobs:
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
-      TOBIIBRIDGE_APP_PATH: ${{ github.workspace }}/release-build/TobiiBridge-Native-v1.6.1.app
+      TOBIIBRIDGE_APP_PATH: ${{ github.workspace }}/release-build/TobiiBridge-Native-v1.6.2.app
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +39,14 @@ jobs:
         run: |
           zig version
           a51m-bridge/build.sh
+
+      - name: Check smart dim preference persistence
+        working-directory: a51m-bridge
+        run: |
+          python3 tools/smart-dim-persistence-tests.py "$RUNNER_TEMP/SmartDimPersistenceTests.swift"
+          swiftc -framework AppKit -framework IOKit -I native \
+            "$RUNNER_TEMP/SmartDimPersistenceTests.swift" DisplayRouting.swift -o "$RUNNER_TEMP/smart-dim-tests"
+          "$RUNNER_TEMP/smart-dim-tests"
 
       - name: Package
         run: |

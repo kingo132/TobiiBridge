@@ -1,4 +1,9 @@
 
+func testTrackingDisplay() -> TrackingDisplay? {
+    TrackingDisplay(id: 1, uuid: "test-panel", name: "Test internal panel",
+        frame: CGRect(x: 0, y: 0, width: 200, height: 200), scale: 1, builtIn: true)
+}
+
 final class FakePhysicalBrightness {
     static var initiallyAvailable = true
     var available = FakePhysicalBrightness.initiallyAvailable

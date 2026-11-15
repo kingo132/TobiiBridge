@@ -247,9 +247,13 @@ final class PhysicalBrightness {
         guard !dimmed else { return }
         invalidateService()
         var iter: io_iterator_t = 0
-        guard IOServiceGetMatchingServices(
+        let matchResult = IOServiceGetMatchingServices(
             kIOMainPortDefault, IOServiceMatching("IODisplayConnect"), &iter
-        ) == KERN_SUCCESS else { return }
+        )
+        guard matchResult == KERN_SUCCESS else {
+            NativeLogger.shared.write("Backlight discovery failed: result=\(hex(matchResult))")
+            return
+        }
         defer { IOObjectRelease(iter) }
         var found: [(io_service_t, Bool)] = []
         while true {
@@ -275,7 +279,10 @@ final class PhysicalBrightness {
         for (candidate, _) in found where candidate != chosen {
             IOObjectRelease(candidate)
         }
-        if let chosen { service = chosen }
+        if let chosen {
+            service = chosen
+            NativeLogger.shared.write("Backlight selected: \(serviceDescription), readableCandidates=\(found.count)")
+        }
     }
 
     deinit {
@@ -283,6 +290,16 @@ final class PhysicalBrightness {
     }
 
     var available: Bool { service != 0 }
+
+    private func hex(_ result: IOReturn) -> String {
+        String(format: "0x%08x", UInt32(bitPattern: result))
+    }
+
+    private var serviceDescription: String {
+        var registryID: UInt64 = 0
+        _ = IORegistryEntryGetRegistryEntryID(service, &registryID)
+        return "service=\(service), registryID=0x\(String(registryID, radix: 16))"
+    }
 
     func invalidateService() {
         if service != 0 { IOObjectRelease(service) }
@@ -292,8 +309,12 @@ final class PhysicalBrightness {
     func read() -> Float? {
         guard available else { return nil }
         var value: Float = -1
-        guard IODisplayGetFloatParameter(service, 0, key, &value) == KERN_SUCCESS,
-              value.isFinite, value > 0, value <= 1 else { return nil }
+        let result = IODisplayGetFloatParameter(service, 0, key, &value)
+        guard result == KERN_SUCCESS,
+              value.isFinite, value > 0, value <= 1 else {
+            NativeLogger.shared.write("Backlight read failed: \(serviceDescription), result=\(hex(result)), value=\(value)")
+            return nil
+        }
         return value
     }
 
@@ -301,8 +322,19 @@ final class PhysicalBrightness {
     private func write(_ value: Float) -> Bool {
         guard available else { return false }
         let target = min(1, max(0.1, value))
-        guard IODisplaySetFloatParameter(service, 0, key, target) == KERN_SUCCESS,
-              let actual = read(), abs(actual - target) <= 0.08 else { return false }
+        let result = IODisplaySetFloatParameter(service, 0, key, target)
+        guard result == KERN_SUCCESS else {
+            NativeLogger.shared.write("Backlight write rejected: \(serviceDescription), result=\(hex(result)), target=\(target)")
+            return false
+        }
+        guard let actual = read() else {
+            NativeLogger.shared.write("Backlight write readback unavailable: \(serviceDescription), target=\(target)")
+            return false
+        }
+        guard abs(actual - target) <= 0.08 else {
+            NativeLogger.shared.write("Backlight readback mismatch: \(serviceDescription), writeResult=\(hex(result)), target=\(target), actual=\(actual), tolerance=0.08")
+            return false
+        }
         lastWritten = actual
         return true
     }
@@ -509,6 +541,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         createOverlay()
         dotVisible = preferences.object(forKey: "showGazeDot") as? Bool ?? false
         dimEnabled = preferences.bool(forKey: "physicalDimEnabled")
+        NativeLogger.shared.write("Smart dim preference restored: \(dimEnabled ? "on" : "off"); backlight available=\(hardware.available)")
         let stored = preferences.object(forKey: "physicalDimLevel") as? Float ?? 0.25
         dimLevel = min(0.9, max(0.1, stored))
         let delay = preferences.object(forKey: "dimAfterSeconds") as? Double ?? 8.0

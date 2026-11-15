@@ -11,6 +11,10 @@ import sys
 bridge = Path(__file__).resolve().parent.parent
 src = (bridge / "TobiiBridge.swift").read_text()
 src = src.replace('TobiiBridge-Native.log', 'TobiiBridge-PersistenceTests.log')
+src = src.replace('.appendingPathComponent("TobiiBridge")',
+                  '.appendingPathComponent("TobiiBridge-PersistenceTests")')
+src = src.replace('TrackingDisplay.current()', 'testTrackingDisplay()')
+src = src.replace('window.orderFrontRegardless()', '// Keep test overlays hidden.')
 src = src.replace('UserDefaults(suiteName: "local.tobiibridge.shared")!',
                   'UserDefaults(suiteName: "local.tobiibridge.persistence-tests")!')
 src = src.replace('private var hardware = PhysicalBrightness()',
