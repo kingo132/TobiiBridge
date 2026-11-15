@@ -274,7 +274,16 @@ final class PhysicalBrightness {
                 IOObjectRelease(entry)
             }
         }
-        let builtIn = found.filter { $0.1 }
+        let builtIn = found.filter {
+            if $0.1 { return true }
+            guard found.count > 1,
+                  let data = IORegistryEntrySearchCFProperty($0.0, kIOServicePlane,
+                    "IODisplayConnectFlags" as CFString, kCFAllocatorDefault,
+                    IOOptionBits(kIORegistryIterateRecursively)) as? Data,
+                  data.count >= 4 else { return false }
+            let flags = data.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+            return flags & 0x800 != 0 // kIOConnectionBuiltIn
+        }
         let chosen: io_service_t?
         if builtIn.count == 1 { chosen = builtIn[0].0 }
         else if found.count == 1 { chosen = found[0].0 }
@@ -452,6 +461,8 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     // Persistent settings share one defaults domain across app versions.
     private let preferences = UserDefaults(suiteName: "local.tobiibridge.shared")!
     private var hardware = PhysicalBrightness()
+    private var externalBacklights = ExternalBacklights()
+    private var dimDisplaysItem: NSMenuItem!
     private var dimEnabled = false
     private var brightnessRetryAt = Date.distantPast
     private let brightnessRetryDelay: TimeInterval = 5
@@ -621,6 +632,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidChangeScreenParameters(_ notification: Notification) {
+        externalBacklights.refresh()
         refreshTrackingDisplay()
     }
 
@@ -819,6 +831,9 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         dimMenuItem.target = self
         dimMenuItem.state = dimEnabled ? .on : .off
         menu.addItem(dimMenuItem)
+        dimDisplaysItem = NSMenuItem(title: "Dim displays: checking", action: nil, keyEquivalent: "")
+        dimDisplaysItem.isEnabled = false
+        menu.addItem(dimDisplaysItem)
 
         delayMenu = NSMenu()
         for delay in [3, 5, 8, 15, 30] {
@@ -1015,6 +1030,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
 
     private func resetPresence(_ reason: String) {
         hardware.restore()
+        externalBacklights.restore()
         presenceLastSeen = Date()
         presenceStreak = 0
         presenceReady = false
@@ -1030,6 +1046,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
             if presenceStreak >= 3 {
                 presenceReady = true
                 presenceLastSeen = Date()
+                externalBacklights.restore(duration: selectedRestoreDuration)
                 if hardware.dimmed && !hardware.isRestoring {
                     hardware.restore(duration: selectedRestoreDuration)
                     setIndicator(.connected)
@@ -1043,6 +1060,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     private func updatePresence() {
         guard dimEnabled else {
             hardware.restore()
+            externalBacklights.restore()
             presenceStatus("disabled")
             return
         }
@@ -1067,6 +1085,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         }
         guard trackingDisplay != nil, !sleeping, !shuttingDown, !calibrating, !paused else {
             hardware.restore()
+            externalBacklights.restore()
             presenceStatus("suspended")
             return
         }
@@ -1077,6 +1096,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
             return
         }
         if hardware.detectManualOverride() {
+            externalBacklights.restore(duration: selectedRestoreDuration)
             manualOverrideUntil = Date().addingTimeInterval(30)
             presenceLastSeen = Date()
             presenceStatus("manual brightness override")
@@ -1094,6 +1114,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
             )
             if idle.isFinite && idle >= 0 && idle < 3 {
                 presenceLastSeen = Date()
+                externalBacklights.restore(duration: selectedRestoreDuration)
                 if hardware.dimmed && !hardware.isRestoring {
                     hardware.restore(duration: selectedRestoreDuration)
                     setIndicator(.connected)
@@ -1104,11 +1125,13 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         }
         guard presenceReady else {
             hardware.restore()
+            externalBacklights.restore()
             presenceStatus("waiting for gaze")
             return
         }
         let missingFor = Date().timeIntervalSince(presenceLastSeen)
         if missingFor >= dimAfter {
+            externalBacklights.dim(to: dimLevel, duration: selectedDimDuration)
             if !hardware.dimmed {
                 if let current = hardware.read(), current <= dimLevel + 0.01 {
                     presenceStatus("already below dim target")
@@ -1120,6 +1143,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
                 }
             }
         } else {
+            externalBacklights.restore(duration: selectedRestoreDuration)
             if hardware.dimmed && !hardware.isRestoring {
                 hardware.restore(duration: selectedRestoreDuration)
                 setIndicator(.connected)
@@ -1152,10 +1176,18 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         if hardware.dimmed && !hardware.dim(to: dimLevel, duration: selectedDimDuration) {
             suspendSmartDim("brightness write failed while changing target")
         }
+        // Update active external fades even when the internal panel was already
+        // below the target and therefore never entered a dimmed state.
+        if dimEnabled && presenceReady && trackingDisplay != nil &&
+           !paused && !calibrating && !sleeping && nativeToken != nil &&
+           Date().timeIntervalSince(presenceLastSeen) >= dimAfter {
+            externalBacklights.dim(to: dimLevel, duration: selectedDimDuration)
+        }
     }
 
     @objc private func restoreScreenNow() {
         hardware.restore()
+        externalBacklights.restore()
         presenceLastSeen = Date()
         manualOverrideUntil = Date().addingTimeInterval(10)
         presenceStatus("manually restored")
@@ -1370,6 +1402,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         paused = false
         calibrating = true
         hardware.restore()
+        externalBacklights.restore()
         targetIndex = 0
         retries = 0
 
@@ -1760,6 +1793,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
 
         sleeping = true
         resetPresence("sleeping")
+        externalBacklights.restoreBeforeTransition()
 
         // Do not save a partially completed calibration.
         // Existing calibration.json stays untouched.
@@ -1791,6 +1825,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         print("System woke up")
 
         sleeping = false
+        externalBacklights.refresh()
         refreshTrackingDisplay()
 
         setIndicator(.reconnecting)
@@ -1810,6 +1845,8 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         guard elapsed >= 1.0 else {
             return
         }
+        let names = externalBacklights.displayNames
+        dimDisplaysItem?.title = "Dim displays: built-in" + (names.isEmpty ? "" : ", " + names.joined(separator: ", "))
 
         let fps = Double(framesInWindow) / elapsed
 
@@ -1897,6 +1934,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     ) -> NSApplication.TerminateReply {
         shuttingDown = true
         hardware.restore()
+        externalBacklights.restoreBeforeTransition()
         if nativeToken != nil {
             exitReplyPending = true
             stopNativeTracker()
@@ -1917,6 +1955,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     ) {
         shuttingDown = true
         hardware.restore()
+        externalBacklights.restoreBeforeTransition()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 

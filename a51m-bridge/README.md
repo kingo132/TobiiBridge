@@ -31,6 +31,8 @@ Current runtime architecture: **Swift/AppKit + Zig + libusb + IOKit**. Node.js a
   unavailable brightness control is retried every five seconds without clearing the preference
 - V1.6.3: accepts valid zero brightness and uses the framebuffer to resolve the
   current display object after connection replacement
+- V1.7.0: smart dim also controls supported external screens using native
+  brightness or Intel DDC/CI, with an independent restoration level for each screen
 - Icon-only menu-bar status and macOS app icon
 
 ## Build inside a tobiifree checkout
@@ -60,7 +62,7 @@ cd a51m-bridge
 Run:
 
 ```bash
-open "$HOME/Applications/TobiiBridge-Native-v1.6.3.app"
+open "$HOME/Applications/TobiiBridge-Native-v1.7.0.app"
 ```
 
 The build copies `driver/src/tobiifree_core.zig` and `driver/src/tlv.zig` into the local native build directory, compiles the Zig bridge into a static library, compiles Swift/AppKit, bundles `libusb-1.0.0.dylib`, fixes `@rpath`, and ad-hoc signs the app.
@@ -106,12 +108,14 @@ Run the isolated persistence regression checks (no physical backlight writes or 
 ```bash
 python3 tools/smart-dim-persistence-tests.py /tmp/SmartDimPersistenceTests.swift
 swiftc -framework AppKit -framework IOKit -I native \
-  /tmp/SmartDimPersistenceTests.swift DisplayRouting.swift -o /tmp/smart-dim-tests
+  /tmp/SmartDimPersistenceTests.swift DisplayRouting.swift ExternalBacklights.swift -o /tmp/smart-dim-tests
 /tmp/smart-dim-tests
 python3 tools/smart-dim-persistence-tests.py /tmp/BrightnessBoundaryTests.swift --brightness-boundaries
 swiftc -framework AppKit -framework IOKit -I native \
-  /tmp/BrightnessBoundaryTests.swift DisplayRouting.swift -o /tmp/brightness-boundary-tests
+  /tmp/BrightnessBoundaryTests.swift DisplayRouting.swift ExternalBacklights.swift -o /tmp/brightness-boundary-tests
 /tmp/brightness-boundary-tests
+swiftc -framework AppKit -framework IOKit ExternalBacklights.swift tools/external-backlights-tests.swift -o /tmp/external-backlights-tests
+/tmp/external-backlights-tests
 ```
 
 The second suite exercises the production brightness class with mocked IOKit
@@ -130,6 +134,39 @@ swiftc -framework IOKit tools/brightness-probe.swift -o /tmp/tobii-brightness-pr
 On the tested A51m R2 the physical panel backlight changed successfully and restored to the original value.
 
 ## Notes
+
+### All-screen physical smart dim (V1.7.0)
+
+The built-in panel and supported connected external screens follow the same
+presence timer. External screens use their native brightness parameter where
+available, otherwise brightness VCP `0x10` over Intel framebuffer I2C/DDC/CI.
+BetterDisplay is not a runtime dependency. There is no software dimming, gamma
+table, overlay, display-power or input-switch fallback.
+
+The target remains an **absolute brightness ceiling**. A screen already at or
+below that target receives no write. In particular, an external screen at
+hardware brightness 0 remains at 0 even with a 10% smart-dim target. Hardware
+minimum need not extinguish the LCD backlight.
+
+Each screen records its own brightness before dimming and restores that value
+when attention/input returns, the feature is disabled, calibration/pause starts,
+or the app quits/sleeps. Manual brightness changes release that screen from
+automatic ownership. DDC reads, fades and verification run on a serial worker;
+repeat presence callbacks are coalesced. Display discovery refreshes after
+configuration changes/wake and periodically, and uses stable screen identity to
+keep restoration state across endpoint replacement. Ambiguous identity matches
+are skipped rather than targeting an arbitrary display.
+
+The menu lists discovered external dim targets. A display without a working
+native or DDC brightness interface is not controlled. The DDC path in this
+release targets Intel Macs; Apple Silicon IOAV transport is not implemented.
+The integrated eye tracker still observes its own tracking area; adding dim
+targets does not add external-screen gaze calibration. Keyboard/mouse activity
+continues to postpone dimming as before.
+
+Packet/I2C behavior was cross-checked against
+[MonitorControl's Intel DDC implementation](https://github.com/MonitorControl/MonitorControl/blob/main/MonitorControl/Support/IntelDDC.swift)
+and Apple's `IOI2CInterface.h` API contract.
 
 - The device-specific native transport currently targets VID:PID `2104:030E`.
 - USB interface 0, Bulk IN `0x83`, Bulk OUT `0x05`, session open `0x41`, close `0x42` were verified on the tested system.

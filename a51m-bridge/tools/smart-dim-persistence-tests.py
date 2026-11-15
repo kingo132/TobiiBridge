@@ -12,6 +12,8 @@ bridge = Path(__file__).resolve().parent.parent
 src = Path(sys.argv[3]).read_text() if len(sys.argv) > 3 else (bridge / "TobiiBridge.swift").read_text()
 boundaries = len(sys.argv) > 2 and sys.argv[2] == "--brightness-boundaries"
 src = src.replace('TobiiBridge-Native.log', 'TobiiBridge-PersistenceTests.log')
+src = src.replace('private var externalBacklights = ExternalBacklights()',
+                  'private var externalBacklights = ExternalBacklights(enabled: false)')
 src = src.replace('.appendingPathComponent("TobiiBridge")',
                   '.appendingPathComponent("TobiiBridge-PersistenceTests")')
 src = src.replace('TrackingDisplay.current()', 'testTrackingDisplay()')
