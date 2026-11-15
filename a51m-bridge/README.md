@@ -33,6 +33,8 @@ Current runtime architecture: **Swift/AppKit + Zig + libusb + IOKit**. Node.js a
   current display object after connection replacement
 - V1.7.0: smart dim also controls supported external screens using native
   brightness or Intel DDC/CI, with an independent restoration level for each screen
+- V1.7.1: external-display protection pauses eye-triggered dimming whenever an
+  external screen is connected, including partial-lid and external-only use
 - Icon-only menu-bar status and macOS app icon
 
 ## Build inside a tobiifree checkout
@@ -62,7 +64,7 @@ cd a51m-bridge
 Run:
 
 ```bash
-open "$HOME/Applications/TobiiBridge-Native-v1.7.0.app"
+open "$HOME/Applications/TobiiBridge-Native-v1.7.1.app"
 ```
 
 The build copies `driver/src/tobiifree_core.zig` and `driver/src/tlv.zig` into the local native build directory, compiles the Zig bridge into a static library, compiles Swift/AppKit, bundles `libusb-1.0.0.dylib`, fixes `@rpath`, and ad-hoc signs the app.
@@ -116,6 +118,10 @@ swiftc -framework AppKit -framework IOKit -I native \
 /tmp/brightness-boundary-tests
 swiftc -framework AppKit -framework IOKit ExternalBacklights.swift tools/external-backlights-tests.swift -o /tmp/external-backlights-tests
 /tmp/external-backlights-tests
+python3 tools/smart-dim-persistence-tests.py /tmp/ExternalSafetyTests.swift --external-safety
+swiftc -framework AppKit -framework IOKit -I native \
+  /tmp/ExternalSafetyTests.swift DisplayRouting.swift ExternalBacklights.swift -o /tmp/external-safety-tests
+/tmp/external-safety-tests
 ```
 
 The second suite exercises the production brightness class with mocked IOKit
@@ -135,10 +141,32 @@ On the tested A51m R2 the physical panel backlight changed successfully and rest
 
 ## Notes
 
-### All-screen physical smart dim (V1.7.0)
+### External-display protection (V1.7.1)
 
-The built-in panel and supported connected external screens follow the same
-presence timer. External screens use their native brightness parameter where
+Eye-triggered dimming is paused whenever any external display is online, the
+lid is reported closed, or display topology cannot be read. This also protects
+partially closed lids: the external-display condition applies even when the
+lid switch still reports open. Missing gaze cannot distinguish a user reading
+another screen from a user who has left.
+
+Entering protection restores brightness owned by the app. The enabled
+preference is preserved, the menu explains the paused state, and returning to
+the built-in screen alone requires fresh gaze before dimming can resume.
+macOS's existing idle display-sleep policy is not changed. No short keyboard
+idle timer is substituted for gaze; prolonged reading on the external display
+therefore does not trigger this app's gaze-dim timeout.
+
+This changes V1.7.0's automatic multi-screen behavior. The hardware backends
+below remain available, but external hardware support does not imply reliable
+external-screen gaze detection. Tobii Experience documents disabling Dim screen
+when two or more monitors are connected:
+[Windows Interaction features](https://help.tobii.com/hc/en-us/articles/209525449-Windows-Interaction-features).
+
+### Multi-screen hardware controller (introduced in V1.7.0)
+
+The controller can dim/restore the built-in panel and supported external
+screens together; the V1.7.1 safety policy above governs automatic triggering.
+External screens use their native brightness parameter where
 available, otherwise brightness VCP `0x10` over Intel framebuffer I2C/DDC/CI.
 BetterDisplay is not a runtime dependency. There is no software dimming, gamma
 table, overlay, display-power or input-switch fallback.

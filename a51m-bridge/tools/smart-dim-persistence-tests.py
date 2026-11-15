@@ -11,6 +11,8 @@ import sys
 bridge = Path(__file__).resolve().parent.parent
 src = Path(sys.argv[3]).read_text() if len(sys.argv) > 3 else (bridge / "TobiiBridge.swift").read_text()
 boundaries = len(sys.argv) > 2 and sys.argv[2] == "--brightness-boundaries"
+safety = len(sys.argv) > 2 and sys.argv[2] == "--external-safety"
+src = src.replace('GazeDimmingSafety.currentPauseReason()', 'testPauseReason' if safety else 'nil')
 src = src.replace('TobiiBridge-Native.log', 'TobiiBridge-PersistenceTests.log')
 src = src.replace('private var externalBacklights = ExternalBacklights()',
                   'private var externalBacklights = ExternalBacklights(enabled: false)')
@@ -51,6 +53,9 @@ src = src[:b] + '\n        // No real USB worker in these tests.\n    }' + src[e
 src = src.replace('let idle = CGEventSource.secondsSinceLastEventType(\n                .combinedSessionState, eventType: anyInput\n            )',
                   'let idle = 100.0\n            _ = anyInput')
 src = src[:src.index('@main\nstruct TobiiBridgeMain')]
-fixture = "brightness-boundary-fixture.swift" if boundaries else "smart-dim-fixture.swift"
+fixture = "external-safety-fixture.swift" if safety else ("brightness-boundary-fixture.swift" if boundaries else "smart-dim-fixture.swift")
 harness = (bridge / "tools" / fixture).read_text()
+if safety:
+    dependencies = (bridge / "tools/smart-dim-fixture.swift").read_text().split('extension BridgeApp')[0]
+    harness = dependencies + harness
 Path(sys.argv[1]).write_text(src + harness)

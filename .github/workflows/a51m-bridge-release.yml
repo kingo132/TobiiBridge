@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag, created on the dispatched commit if it does not exist (e.g. a51m-bridge-v1.7.0)'
+        description: 'Release tag, created on the dispatched commit if it does not exist (e.g. a51m-bridge-v1.7.1)'
         required: true
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
-      TOBIIBRIDGE_APP_PATH: ${{ github.workspace }}/release-build/TobiiBridge-Native-v1.7.0.app
+      TOBIIBRIDGE_APP_PATH: ${{ github.workspace }}/release-build/TobiiBridge-Native-v1.7.1.app
     steps:
       - uses: actions/checkout@v4
 
@@ -53,6 +53,10 @@ jobs:
           "$RUNNER_TEMP/brightness-boundary-tests"
           swiftc -framework AppKit -framework IOKit ExternalBacklights.swift tools/external-backlights-tests.swift -o "$RUNNER_TEMP/external-backlights-tests"
           "$RUNNER_TEMP/external-backlights-tests"
+          python3 tools/smart-dim-persistence-tests.py "$RUNNER_TEMP/ExternalSafetyTests.swift" --external-safety
+          swiftc -framework AppKit -framework IOKit -I native \
+            "$RUNNER_TEMP/ExternalSafetyTests.swift" DisplayRouting.swift ExternalBacklights.swift -o "$RUNNER_TEMP/external-safety-tests"
+          "$RUNNER_TEMP/external-safety-tests"
 
       - name: Package
         run: |

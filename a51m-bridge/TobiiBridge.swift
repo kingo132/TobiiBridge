@@ -463,6 +463,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     private var hardware = PhysicalBrightness()
     private var externalBacklights = ExternalBacklights()
     private var dimDisplaysItem: NSMenuItem!
+    private var gazeDimmingPauseReason: String? = GazeDimmingSafety.currentPauseReason()
     private var dimEnabled = false
     private var brightnessRetryAt = Date.distantPast
     private let brightnessRetryDelay: TimeInterval = 5
@@ -556,6 +557,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         dotVisible = preferences.object(forKey: "showGazeDot") as? Bool ?? false
         dimEnabled = preferences.bool(forKey: "physicalDimEnabled")
         NativeLogger.shared.write("Smart dim preference restored: \(dimEnabled ? "on" : "off"); backlight available=\(hardware.available)")
+        NativeLogger.shared.write("Gaze dimming safety: \(gazeDimmingPauseReason ?? "single built-in display; gaze enabled")")
         let stored = preferences.object(forKey: "physicalDimLevel") as? Float ?? 0.25
         dimLevel = min(0.9, max(0.1, stored))
         let delay = preferences.object(forKey: "dimAfterSeconds") as? Double ?? 8.0
@@ -637,6 +639,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     }
 
     private func refreshTrackingDisplay() {
+        refreshDimmingSafety()
         guard window != nil, displayItem != nil else { return }
         let next = TrackingDisplay.current()
         let previous = trackingDisplay
@@ -675,8 +678,9 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         case .connecting:
             symbol = "arrow.triangle.2.circlepath"; description = "Connecting"
         case .connected:
-            symbol = dimEnabled ? "eye.circle" : "eye.fill"
-            description = dimEnabled ? "Connected · smart dim on" : "Connected"
+            let active = dimEnabled && gazeDimmingPauseReason == nil
+            symbol = active ? "eye.circle" : "eye.fill"
+            description = !dimEnabled ? "Connected" : (active ? "Connected · smart dim on" : "Connected · smart dim paused")
         case .dimmed:
             symbol = "moon.fill"; description = "Physical backlight dimmed"
         case .disconnected:
@@ -1037,7 +1041,22 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         presenceStatus(reason)
     }
 
+    private func refreshDimmingSafety() {
+        let next: String? = GazeDimmingSafety.currentPauseReason()
+        guard next != gazeDimmingPauseReason else { return }
+        gazeDimmingPauseReason = next
+        // Restore any owned brightness on entry, and require fresh gaze on exit.
+        resetPresence(next.map { "paused: " + $0 } ?? "waiting for gaze")
+        NativeLogger.shared.write("Gaze dimming safety: \(next ?? "single built-in display; gaze enabled")")
+        if nativeToken != nil && !paused { setIndicator(.connected) }
+    }
+
     private func receivePresence(valid: Bool, x: Double?, y: Double?) {
+        guard gazeDimmingPauseReason == nil else {
+            presenceStreak = 0
+            presenceReady = false
+            return
+        }
         // Only a fresh gaze point on the tracked screen indicates attention.
         let looking = valid && x != nil && y != nil &&
             (0...1).contains(x!) && (0...1).contains(y!)
@@ -1058,6 +1077,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     }
 
     private func updatePresence() {
+        refreshDimmingSafety()
         guard dimEnabled else {
             hardware.restore()
             externalBacklights.restore()
@@ -1065,6 +1085,12 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
             return
         }
         guard !sleeping, !shuttingDown else { return }
+        if let reason = gazeDimmingPauseReason {
+            hardware.restore()
+            externalBacklights.restore()
+            presenceStatus("paused: " + reason)
+            return
+        }
         guard Date() >= brightnessRetryAt else {
             presenceStatus("temporarily unavailable; retrying")
             return
@@ -1131,7 +1157,8 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         }
         let missingFor = Date().timeIntervalSince(presenceLastSeen)
         if missingFor >= dimAfter {
-            externalBacklights.dim(to: dimLevel, duration: selectedDimDuration)
+            // External screens are never armed by gaze in protected mode. Do
+            // not leave a deferred dim intent for a later hot-plug discovery.
             if !hardware.dimmed {
                 if let current = hardware.read(), current <= dimLevel + 0.01 {
                     presenceStatus("already below dim target")
@@ -1170,18 +1197,13 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     }
 
     @objc private func changeDimLevel(_ sender: NSSlider) {
+        refreshDimmingSafety()
         dimLevel = Float(sender.doubleValue)
         preferences.set(dimLevel, forKey: "physicalDimLevel")
         dimLevelLabel.stringValue = "Dim backlight to \(Int(dimLevel * 100))%"
-        if hardware.dimmed && !hardware.dim(to: dimLevel, duration: selectedDimDuration) {
+        if gazeDimmingPauseReason == nil && hardware.dimmed &&
+           !hardware.dim(to: dimLevel, duration: selectedDimDuration) {
             suspendSmartDim("brightness write failed while changing target")
-        }
-        // Update active external fades even when the internal panel was already
-        // below the target and therefore never entered a dimmed state.
-        if dimEnabled && presenceReady && trackingDisplay != nil &&
-           !paused && !calibrating && !sleeping && nativeToken != nil &&
-           Date().timeIntervalSince(presenceLastSeen) >= dimAfter {
-            externalBacklights.dim(to: dimLevel, duration: selectedDimDuration)
         }
     }
 
@@ -1846,7 +1868,8 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
             return
         }
         let names = externalBacklights.displayNames
-        dimDisplaysItem?.title = "Dim displays: built-in" + (names.isEmpty ? "" : ", " + names.joined(separator: ", "))
+        dimDisplaysItem?.title = gazeDimmingPauseReason.map { "Smart dim paused: " + $0 }
+            ?? ("Dim displays: built-in" + (names.isEmpty ? "" : ", " + names.joined(separator: ", ")))
 
         let fps = Double(framesInWindow) / elapsed
 

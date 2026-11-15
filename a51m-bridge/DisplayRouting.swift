@@ -1,5 +1,36 @@
 import AppKit
 import CoreGraphics
+import IOKit
+
+// A missing gaze sample cannot distinguish absence from reading another display
+// or an obscured tracker under a partially closed lid. Fail closed for gaze dim.
+enum GazeDimmingSafety {
+    static func pauseReason(displayIsBuiltIn flags: [Bool]?, lidClosed: Bool) -> String? {
+        if lidClosed { return "lid closed" }
+        guard let flags, !flags.isEmpty else { return "display configuration unavailable" }
+        if flags.contains(false) { return "external display connected" }
+        return nil
+    }
+
+    static func currentPauseReason() -> String? {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 32)
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(32, &ids, &count) == .success else {
+            return pauseReason(displayIsBuiltIn: nil, lidClosed: false)
+        }
+        let flags = ids.prefix(Int(count)).map { CGDisplayIsBuiltin($0) != 0 }
+        // This also protects partial-lid use even when the lid switch is open.
+        if flags.contains(false) { return pauseReason(displayIsBuiltIn: flags, lidClosed: false) }
+        let root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        var closed = false
+        if root != 0 {
+            closed = (IORegistryEntryCreateCFProperty(root, "AppleClamshellState" as CFString,
+                kCFAllocatorDefault, 0)?.takeRetainedValue() as? Bool) == true
+            IOObjectRelease(root)
+        }
+        return pauseReason(displayIsBuiltIn: flags, lidClosed: closed)
+    }
+}
 
 // This bridge drives the integrated IS5 in the Area-51m, not a movable USB
 // peripheral. The physical panel determines the tracking area, never focus,

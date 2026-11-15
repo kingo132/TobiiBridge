@@ -6,7 +6,7 @@ REPO="$(cd "$BRIDGE/.." && pwd)"
 NATIVE="$BRIDGE/native"
 SRC="$BRIDGE/TobiiBridge.swift"
 ICON="$BRIDGE/assets/AppIcon-1024.png"
-APP="${TOBIIBRIDGE_APP_PATH:-$HOME/Applications/TobiiBridge-Native-v1.7.0.app}"
+APP="${TOBIIBRIDGE_APP_PATH:-$HOME/Applications/TobiiBridge-Native-v1.7.1.app}"
 LIBUSB="$(brew --prefix libusb)"
 
 [ -f "$REPO/driver/src/tobiifree_core.zig" ] || { echo "Missing $REPO/driver/src/tobiifree_core.zig"; exit 1; }
@@ -65,8 +65,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>TobiiBridge</string>
 <key>CFBundleDisplayName</key><string>TobiiBridge</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.7.0</string>
-<key>CFBundleVersion</key><string>20</string>
+<key>CFBundleShortVersionString</key><string>1.7.1</string>
+<key>CFBundleVersion</key><string>21</string>
 <key>CFBundleIconFile</key><string>AppIcon.icns</string>
 <key>LSUIElement</key><true/>
 </dict></plist>
