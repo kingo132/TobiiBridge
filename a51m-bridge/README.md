@@ -29,6 +29,8 @@ Current runtime architecture: **Swift/AppKit + Zig + libusb + IOKit**. Node.js a
 - Persistent settings via UserDefaults
 - V1.6.2: smart dim remains enabled across temporary backlight failures and login;
   unavailable brightness control is retried every five seconds without clearing the preference
+- V1.6.3: accepts valid zero brightness and uses the framebuffer to resolve the
+  current display object after connection replacement
 - Icon-only menu-bar status and macOS app icon
 
 ## Build inside a tobiifree checkout
@@ -58,7 +60,7 @@ cd a51m-bridge
 Run:
 
 ```bash
-open "$HOME/Applications/TobiiBridge-Native-v1.6.2.app"
+open "$HOME/Applications/TobiiBridge-Native-v1.6.3.app"
 ```
 
 The build copies `driver/src/tobiifree_core.zig` and `driver/src/tlv.zig` into the local native build directory, compiles the Zig bridge into a static library, compiles Swift/AppKit, bundles `libusb-1.0.0.dylib`, fixes `@rpath`, and ad-hoc signs the app.
@@ -106,7 +108,16 @@ python3 tools/smart-dim-persistence-tests.py /tmp/SmartDimPersistenceTests.swift
 swiftc -framework AppKit -framework IOKit -I native \
   /tmp/SmartDimPersistenceTests.swift DisplayRouting.swift -o /tmp/smart-dim-tests
 /tmp/smart-dim-tests
+python3 tools/smart-dim-persistence-tests.py /tmp/BrightnessBoundaryTests.swift --brightness-boundaries
+swiftc -framework AppKit -framework IOKit -I native \
+  /tmp/BrightnessBoundaryTests.swift DisplayRouting.swift -o /tmp/brightness-boundary-tests
+/tmp/brightness-boundary-tests
 ```
+
+The second suite exercises the production brightness class with mocked IOKit
+calls, including minimum brightness and display-connection retirement. See
+[the failure analysis](docs/SMART_DIM_FAILURE_ANALYSIS.md) for live reproduction,
+Apple source references, and the limits of historical attribution.
 
 Before relying on smart dimming on another machine:
 

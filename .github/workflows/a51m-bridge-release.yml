@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag, created on the dispatched commit if it does not exist (e.g. a51m-bridge-v1.6.1)'
+        description: 'Release tag, created on the dispatched commit if it does not exist (e.g. a51m-bridge-v1.6.3)'
         required: true
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
-      TOBIIBRIDGE_APP_PATH: ${{ github.workspace }}/release-build/TobiiBridge-Native-v1.6.2.app
+      TOBIIBRIDGE_APP_PATH: ${{ github.workspace }}/release-build/TobiiBridge-Native-v1.6.3.app
     steps:
       - uses: actions/checkout@v4
 
@@ -47,6 +47,10 @@ jobs:
           swiftc -framework AppKit -framework IOKit -I native \
             "$RUNNER_TEMP/SmartDimPersistenceTests.swift" DisplayRouting.swift -o "$RUNNER_TEMP/smart-dim-tests"
           "$RUNNER_TEMP/smart-dim-tests"
+          python3 tools/smart-dim-persistence-tests.py "$RUNNER_TEMP/BrightnessBoundaryTests.swift" --brightness-boundaries
+          swiftc -framework AppKit -framework IOKit -I native \
+            "$RUNNER_TEMP/BrightnessBoundaryTests.swift" DisplayRouting.swift -o "$RUNNER_TEMP/brightness-boundary-tests"
+          "$RUNNER_TEMP/brightness-boundary-tests"
 
       - name: Package
         run: |

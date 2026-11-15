@@ -9,7 +9,8 @@ from pathlib import Path
 import sys
 
 bridge = Path(__file__).resolve().parent.parent
-src = (bridge / "TobiiBridge.swift").read_text()
+src = Path(sys.argv[3]).read_text() if len(sys.argv) > 3 else (bridge / "TobiiBridge.swift").read_text()
+boundaries = len(sys.argv) > 2 and sys.argv[2] == "--brightness-boundaries"
 src = src.replace('TobiiBridge-Native.log', 'TobiiBridge-PersistenceTests.log')
 src = src.replace('.appendingPathComponent("TobiiBridge")',
                   '.appendingPathComponent("TobiiBridge-PersistenceTests")')
@@ -17,8 +18,26 @@ src = src.replace('TrackingDisplay.current()', 'testTrackingDisplay()')
 src = src.replace('window.orderFrontRegardless()', '// Keep test overlays hidden.')
 src = src.replace('UserDefaults(suiteName: "local.tobiibridge.shared")!',
                   'UserDefaults(suiteName: "local.tobiibridge.persistence-tests")!')
-src = src.replace('private var hardware = PhysicalBrightness()',
-                  'private var hardware = FakePhysicalBrightness()')
+if not boundaries:
+    src = src.replace('private var hardware = PhysicalBrightness()',
+                      'private var hardware = FakePhysicalBrightness()')
+else:
+    # Exercise the production PhysicalBrightness class. Replace only its IOKit
+    # boundary, so tests distinguish a successful zero reading from an API error.
+    start = src.index('final class PhysicalBrightness')
+    end = src.index('final class BridgeApp', start)
+    brightness = src[start:end]
+    for native, mock in {
+        'IOServiceGetMatchingServices': 'FixtureBrightnessIO.discover',
+        'IOIteratorNext': 'FixtureBrightnessIO.next',
+        'IOObjectRelease': 'FixtureBrightnessIO.release',
+        'IORegistryEntryCreateCFProperty': 'FixtureBrightnessIO.property',
+        'IORegistryEntryGetRegistryEntryID': 'FixtureBrightnessIO.registryID',
+        'IODisplayGetFloatParameter': 'FixtureBrightnessIO.read',
+        'IODisplaySetFloatParameter': 'FixtureBrightnessIO.write',
+    }.items():
+        brightness = brightness.replace(native + '(', mock + '(')
+    src = src[:start] + brightness + src[end:]
 a = src.index('    private func startTracker() {')
 b = src.index('{', a) + 1
 depth, end = 1, b
@@ -30,5 +49,6 @@ src = src[:b] + '\n        // No real USB worker in these tests.\n    }' + src[e
 src = src.replace('let idle = CGEventSource.secondsSinceLastEventType(\n                .combinedSessionState, eventType: anyInput\n            )',
                   'let idle = 100.0\n            _ = anyInput')
 src = src[:src.index('@main\nstruct TobiiBridgeMain')]
-harness = (bridge / "tools/smart-dim-fixture.swift").read_text()
+fixture = "brightness-boundary-fixture.swift" if boundaries else "smart-dim-fixture.swift"
+harness = (bridge / "tools" / fixture).read_text()
 Path(sys.argv[1]).write_text(src + harness)

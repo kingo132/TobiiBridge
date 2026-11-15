@@ -219,7 +219,7 @@ final class NativeLogger {
 }
 
 // Physical backlight control only. No gamma LUT and no overlay fallback.
-// IODisplayConnect may be unavailable on some Hackintosh configurations.
+// The framebuffer's brightness API may be unavailable on some configurations.
 // Physical backlight only: no gamma/overlay. All calls originate on AppKit's main thread.
 final class PhysicalBrightness {
     private var service: io_service_t = 0
@@ -242,13 +242,16 @@ final class PhysicalBrightness {
         refreshService()
     }
 
-    // The backlight service may appear after login or be replaced on wake.
+    // Cache the framebuffer, not IODisplayConnect. IOGraphics destroys and
+    // recreates display-connect objects during connection changes. The public
+    // brightness APIs resolve the framebuffer's current IODisplay descendant
+    // on every call, so a retained, retired connection cannot strand this app.
     func refreshService() {
         guard !dimmed else { return }
         invalidateService()
         var iter: io_iterator_t = 0
         let matchResult = IOServiceGetMatchingServices(
-            kIOMainPortDefault, IOServiceMatching("IODisplayConnect"), &iter
+            kIOMainPortDefault, IOServiceMatching("IOFramebuffer"), &iter
         )
         guard matchResult == KERN_SUCCESS else {
             NativeLogger.shared.write("Backlight discovery failed: result=\(hex(matchResult))")
@@ -261,7 +264,7 @@ final class PhysicalBrightness {
             if entry == 0 { break }
             var value: Float = -1
             if IODisplayGetFloatParameter(entry, 0, key, &value) == KERN_SUCCESS,
-               value.isFinite, value > 0, value <= 1 {
+               value.isFinite, value >= 0, value <= 1 {
                 let prop = IORegistryEntryCreateCFProperty(
                     entry, "IODisplayHasBacklight" as CFString,
                     kCFAllocatorDefault, 0
@@ -311,7 +314,7 @@ final class PhysicalBrightness {
         var value: Float = -1
         let result = IODisplayGetFloatParameter(service, 0, key, &value)
         guard result == KERN_SUCCESS,
-              value.isFinite, value > 0, value <= 1 else {
+              value.isFinite, value >= 0, value <= 1 else {
             NativeLogger.shared.write("Backlight read failed: \(serviceDescription), result=\(hex(result)), value=\(value)")
             return nil
         }

@@ -5,10 +5,10 @@ import IOKit.graphics
 let key = "brightness" as CFString
 var iter: io_iterator_t = 0
 let match = IOServiceGetMatchingServices(
-    kIOMainPortDefault, IOServiceMatching("IODisplayConnect"), &iter
+    kIOMainPortDefault, IOServiceMatching("IOFramebuffer"), &iter
 )
 guard match == KERN_SUCCESS else {
-    print("UNSUPPORTED: IODisplayConnect not available (\(match))")
+    print("UNSUPPORTED: IOFramebuffer not available (\(match))")
     exit(2)
 }
 defer { IOObjectRelease(iter) }
@@ -23,7 +23,7 @@ while true {
         kCFAllocatorDefault, 0
     )?.takeRetainedValue()
     print("Service \(service) get=\(result) brightness=\(value) backlight=\(String(describing: flag))")
-    if result == KERN_SUCCESS && value.isFinite && value > 0 && value <= 1 {
+    if result == KERN_SUCCESS && value.isFinite && value >= 0 && value <= 1 {
         supported.append(service)
     } else { IOObjectRelease(service) }
 }
@@ -37,6 +37,10 @@ var original: Float = -1
 guard IODisplayGetFloatParameter(service, 0, key, &original) == KERN_SUCCESS else { exit(4) }
 print("Original reported brightness: \(original)")
 if CommandLine.arguments.contains("--test") {
+    guard original > 0.11 else {
+        print("SKIPPED: already at or below the dim target; no brightness writes made.")
+        exit(0)
+    }
     let target = max(0.1, original * 0.5)
     print("Testing HARDWARE brightness at \(target) for 2 seconds; observe the LCD backlight.")
     fflush(stdout)
