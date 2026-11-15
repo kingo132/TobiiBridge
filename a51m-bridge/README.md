@@ -27,6 +27,8 @@ Current runtime architecture: **Swift/AppKit + Zig + libusb + IOKit**. Node.js a
 - Configurable target brightness
 - Instant or smooth dim/restore transitions
 - Persistent settings via UserDefaults
+- V1.6.2: smart dim remains enabled across temporary backlight failures and login;
+  unavailable brightness control is retried every five seconds without clearing the preference
 - Icon-only menu-bar status and macOS app icon
 
 ## Build inside a tobiifree checkout
@@ -56,7 +58,7 @@ cd a51m-bridge
 Run:
 
 ```bash
-open "$HOME/Applications/TobiiBridge-Native-v1.6.1.app"
+open "$HOME/Applications/TobiiBridge-Native-v1.6.2.app"
 ```
 
 The build copies `driver/src/tobiifree_core.zig` and `driver/src/tlv.zig` into the local native build directory, compiles the Zig bridge into a static library, compiles Swift/AppKit, bundles `libusb-1.0.0.dylib`, fixes `@rpath`, and ad-hoc signs the app.
@@ -85,6 +87,21 @@ swiftc DisplayRouting.swift tools/display-routing-tests.swift -o /tmp/tobii-disp
 ```
 
 ## Brightness probe
+
+V1.6.2 keeps the smart-dim checkmark as the user's saved choice. Missing or
+unreadable brightness control, failed writes, and failed fades suspend dimming
+without changing that choice. The app retries discovery every five seconds and
+waits for fresh gaze before resuming. Only the menu toggle changes the saved
+enabled preference.
+
+Run the isolated persistence regression checks (no physical backlight writes or USB access):
+
+```bash
+python3 tools/smart-dim-persistence-tests.py /tmp/SmartDimPersistenceTests.swift
+swiftc -framework AppKit -framework IOKit -I native \
+  /tmp/SmartDimPersistenceTests.swift DisplayRouting.swift -o /tmp/smart-dim-tests
+/tmp/smart-dim-tests
+```
 
 Before relying on smart dimming on another machine:
 

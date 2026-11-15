@@ -239,6 +239,13 @@ final class PhysicalBrightness {
     var isRestoring: Bool { fade?.restoring == true }
 
     init() {
+        refreshService()
+    }
+
+    // The backlight service may appear after login or be replaced on wake.
+    func refreshService() {
+        guard !dimmed else { return }
+        invalidateService()
         var iter: io_iterator_t = 0
         guard IOServiceGetMatchingServices(
             kIOMainPortDefault, IOServiceMatching("IODisplayConnect"), &iter
@@ -276,6 +283,11 @@ final class PhysicalBrightness {
     }
 
     var available: Bool { service != 0 }
+
+    func invalidateService() {
+        if service != 0 { IOObjectRelease(service) }
+        service = 0
+    }
 
     func read() -> Float? {
         guard available else { return nil }
@@ -406,6 +418,8 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     private let preferences = UserDefaults(suiteName: "local.tobiibridge.shared")!
     private var hardware = PhysicalBrightness()
     private var dimEnabled = false
+    private var brightnessRetryAt = Date.distantPast
+    private let brightnessRetryDelay: TimeInterval = 5
     private var dimLevel: Float = 0.25
     private var dimMenuItem: NSMenuItem!
     private var dimLevelLabel: NSTextField!
@@ -508,11 +522,8 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         createMenu()
         refreshTrackingDisplay()
         presenceStatus(hardware.available ? "waiting" : "no physical brightness control")
-        if dimEnabled && !hardware.available {
-            dimEnabled = false
-            preferences.set(false, forKey: "physicalDimEnabled")
-            dimMenuItem.state = .off
-        }
+        // dimEnabled is the user's preference, independent of hardware readiness.
+        // A missing backlight at login must not overwrite it.
 
         let nc = NSWorkspace.shared.notificationCenter
 
@@ -771,7 +782,6 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         )
         dimMenuItem.target = self
         dimMenuItem.state = dimEnabled ? .on : .off
-        dimMenuItem.isEnabled = hardware.available
         menu.addItem(dimMenuItem)
 
         delayMenu = NSMenu()
@@ -995,9 +1005,28 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
     }
 
     private func updatePresence() {
-        guard dimEnabled, hardware.available else {
+        guard dimEnabled else {
             hardware.restore()
-            presenceStatus(hardware.available ? "disabled" : "unsupported by display")
+            presenceStatus("disabled")
+            return
+        }
+        guard !sleeping, !shuttingDown else { return }
+        guard Date() >= brightnessRetryAt else {
+            presenceStatus("temporarily unavailable; retrying")
+            return
+        }
+        if !hardware.available {
+            hardware.refreshService()
+            guard hardware.available else {
+                brightnessRetryAt = Date().addingTimeInterval(brightnessRetryDelay)
+                presenceStatus("waiting for brightness control; retrying")
+                return
+            }
+            resetPresence("waiting for gaze")
+            NativeLogger.shared.write("Physical brightness control recovered; smart dim preference preserved")
+        }
+        guard hardware.read() != nil else {
+            suspendSmartDim("brightness read failed")
             return
         }
         guard trackingDisplay != nil, !sleeping, !shuttingDown, !calibrating, !paused else {
@@ -1051,11 +1080,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
                     setIndicator(.dimmed)
                     presenceStatus("physically dimmed to \(Int(dimLevel * 100))%")
                 } else {
-                    dimEnabled = false
-                    preferences.set(false, forKey: "physicalDimEnabled")
-                    dimMenuItem.state = .off
-                    presenceStatus("brightness write failed")
-                    NativeLogger.shared.write("Physical brightness unavailable; auto dim disabled")
+                    suspendSmartDim("brightness write failed")
                 }
             }
         } else {
@@ -1067,13 +1092,18 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func suspendSmartDim(_ reason: String) {
+        resetPresence("temporarily unavailable; retrying")
+        hardware.invalidateService()
+        brightnessRetryAt = Date().addingTimeInterval(brightnessRetryDelay)
+        NativeLogger.shared.write("Physical smart dim suspended: \(reason); preference preserved, retrying in 5s")
+        if nativeToken != nil && !paused { setIndicator(.connected) }
+    }
+
     @objc private func toggleSmartDim() {
-        guard hardware.available else {
-            presenceStatus("unsupported by display")
-            return
-        }
         dimEnabled.toggle()
         preferences.set(dimEnabled, forKey: "physicalDimEnabled")
+        brightnessRetryAt = .distantPast
         dimMenuItem.state = dimEnabled ? .on : .off
         resetPresence(dimEnabled ? "waiting for gaze" : "disabled")
         if nativeToken != nil && !paused { setIndicator(.connected) }
@@ -1084,11 +1114,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         preferences.set(dimLevel, forKey: "physicalDimLevel")
         dimLevelLabel.stringValue = "Dim backlight to \(Int(dimLevel * 100))%"
         if hardware.dimmed && !hardware.dim(to: dimLevel, duration: selectedDimDuration) {
-            hardware.restore()
-            dimEnabled = false
-            preferences.set(false, forKey: "physicalDimEnabled")
-            dimMenuItem.state = .off
-            presenceStatus("brightness write failed")
+            suspendSmartDim("brightness write failed while changing target")
         }
     }
 
@@ -1268,13 +1294,7 @@ final class BridgeApp: NSObject, NSApplicationDelegate {
         refreshStreamStats()
         updatePresence()
         if !hardware.advance() {
-            dimEnabled = false
-            preferences.set(false, forKey: "physicalDimEnabled")
-            dimMenuItem.state = .off
-            manualOverrideUntil = Date().addingTimeInterval(30)
-            presenceStatus("brightness write failed")
-            NativeLogger.shared.write("Physical brightness fade failed; auto dim disabled")
-            setIndicator(.connected)
+            suspendSmartDim("brightness fade failed")
         }
 
         if calibrating {
